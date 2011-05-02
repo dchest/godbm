@@ -29,20 +29,23 @@ import (
 	"encoding/binary"
 	"crypto/md5"
 	"sync"
+	"bytes"
 )
 
 // The HashDB provides a persistent hash table with the usual O(1)
 // characteristics.
 type HashDB struct {
 	nbuckets uint32   // 2^nbuckets buckets
-	buckets  []int64  // bucket array
+	buckets  []uint64 // bucket array
 	file     *os.File // associated file
 	mu       sync.RWMutex
 }
 
 type record struct {
-	offset     int64
-	key, value []byte
+	offset      uint64 // absolute offset of this record
+	size        uint32 // size (in bytes), including padding
+	left, right uint64 // absolute offset of the left and right node
+	key, value  []byte // key and value
 }
 
 // Create a new hash database with 2^nbuckets available slots
@@ -52,7 +55,7 @@ func Create(path string, nbuckets uint32) (db *HashDB, err os.Error) {
 		return
 	}
 	db = &HashDB{
-		buckets:  make([]int64, 1<<nbuckets),
+		buckets:  make([]uint64, 1<<nbuckets),
 		nbuckets: nbuckets,
 		file:     file,
 	}
@@ -73,16 +76,60 @@ func (db *HashDB) Set(key, value []byte) (err os.Error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	offset, err := db.file.Seek(0, 2)
-	db.buckets[db.bucket(key)] = offset
-	db.writeBuckets()
+	if err != nil {
+		return err
+	}
+	bucket_id := db.bucket(key)
+	if db.buckets[bucket_id] == 0 {
+		db.buckets[bucket_id] = uint64(offset)
+		db.writeBuckets()
+	} else {
+		// hash collision
+		other := &record{offset: db.buckets[bucket_id]}
+		cmp, err := db.binSearch(key, other)
+		if err != nil {
+			return err
+		}
+		switch {
+		case cmp == 0:
+			// TODO(tux21b): Updates
+		case cmp < 0:
+			other.left = uint64(offset)
+			db.writeRecord(other)
+		case cmp > 0:
+			other.right = uint64(offset)
+			db.writeRecord(other)
+		}
+	}
+
 	err = db.writeRecord(&record{
-		offset: offset,
+		offset: uint64(offset),
+		size:   nextPowerTwo(uint32(28 + len(key) + len(value))),
 		key:    key,
 		value:  value,
 	})
 	// TODO(tux21b): Sync in specified intervals and just block here
 	db.file.Sync()
 	return
+}
+
+// Perform a binary search to find a specific record. If no matching
+// record was found, then rec is set to the parent record (useful for
+// inserting).
+func (db *HashDB) binSearch(key []byte, rec *record) (int, os.Error) {
+	if err := db.readRecord(rec); err != nil {
+		return 0, err
+	}
+	cmp := bytes.Compare(key, rec.key)
+	switch {
+	case cmp < 0 && rec.left != 0:
+		rec.offset = rec.left
+		return db.binSearch(key, rec)
+	case cmp > 0 && rec.right != 0:
+		rec.offset = rec.right
+		return db.binSearch(key, rec)
+	}
+	return cmp, nil
 }
 
 // Retrieve a (key, value) pair from the database
@@ -94,12 +141,16 @@ func (db *HashDB) Get(key []byte) (value []byte, err os.Error) {
 		return nil, nil
 	}
 	rec := &record{offset: offset}
-	err = db.readRecord(rec)
+	cmp, err := db.binSearch(key, rec)
+	if err != nil || cmp != 0 {
+		return nil, err
+	}
 	value = rec.value
 	return
 }
 
-// Calculate the bucket ID for a given key
+// Calculate the bucket ID for a given key. This ID is always between 0
+// and 2^nbuckets - 1 inclusive.
 func (db *HashDB) bucket(key []byte) (bucket_id uint64) {
 	// TODO(tux21b): Consider using a faster, non-secure hash here (MurMur?)
 	hash := md5.New()
@@ -112,45 +163,52 @@ func (db *HashDB) bucket(key []byte) (bucket_id uint64) {
 	return
 }
 
-// Write a record to the file
+// Write a record to the file.
 func (db *HashDB) writeRecord(rec *record) (err os.Error) {
-	db.file.Seek(rec.offset, 0)
-	err = binary.Write(db.file, binary.BigEndian, uint32(len(rec.key)))
-	if err != nil {
-		return
-	}
-	err = binary.Write(db.file, binary.BigEndian, uint32(len(rec.value)))
-	if err != nil {
-		return
-	}
-	if _, err = db.file.Write(rec.key); err != nil {
-		return
-	}
-	if _, err = db.file.Write(rec.value); err != nil {
-		return
-	}
+	buffer := bytes.NewBuffer(make([]byte, rec.size)[:0])
+	binary.Write(buffer, binary.BigEndian, uint32(rec.size))
+	binary.Write(buffer, binary.BigEndian, uint64(rec.left))
+	binary.Write(buffer, binary.BigEndian, uint64(rec.right))
+	binary.Write(buffer, binary.BigEndian, uint32(len(rec.key)))
+	binary.Write(buffer, binary.BigEndian, uint32(len(rec.value)))
+	buffer.Write(rec.key)
+	buffer.Write(rec.value)
+	_, err = db.file.WriteAt(buffer.Bytes()[:rec.size], int64(rec.offset))
 	return
 }
 
 // Read a record from the file
 func (db *HashDB) readRecord(rec *record) (err os.Error) {
-	if _, err = db.file.Seek(rec.offset, 0); err != nil {
+	header := make([]byte, 28)
+	if _, err = db.file.ReadAt(header, int64(rec.offset)); err != nil {
 		return
 	}
-	var keyl, valuel uint32
-	if err = binary.Read(db.file, binary.BigEndian, &keyl); err != nil {
+	var keyl, vall uint32
+	buffer := bytes.NewBuffer(header)
+	binary.Read(buffer, binary.BigEndian, &rec.size)
+	binary.Read(buffer, binary.BigEndian, &rec.left)
+	binary.Read(buffer, binary.BigEndian, &rec.right)
+	binary.Read(buffer, binary.BigEndian, &keyl)
+	binary.Read(buffer, binary.BigEndian, &vall)
+
+	data := make([]byte, keyl+vall)
+	_, err = db.file.ReadAt(data, int64(rec.offset)+int64(len(header)))
+	if err != nil {
 		return
 	}
-	if err = binary.Read(db.file, binary.BigEndian, &valuel); err != nil {
-		return
-	}
-	rec.key = make([]byte, keyl)
-	if _, err = db.file.Read(rec.key); err != nil {
-		return
-	}
-	rec.value = make([]byte, valuel)
-	if _, err = db.file.Read(rec.value); err != nil {
-		return
-	}
+	rec.key = data[:keyl]
+	rec.value = data[keyl : keyl+vall]
 	return
+}
+
+// Calculates the next power of two
+func nextPowerTwo(x uint32) uint32 {
+	if x == 0 {
+		return 1
+	}
+	x--
+	for i := uint32(1); i < 4*32; i <<= 1 {
+		x |= x >> i
+	}
+	return x + 1
 }
