@@ -1,0 +1,66 @@
+godbm - A fast and native DBM implementation for Go
+===================================================
+
+The godbm package provides a native DBM like database similar to Berkley DB,
+QDBM or Kyota Cabinet.
+
+This lightweight embedded database can only used by one process at a time, but
+that's not a problem because Go programs are quite good a concurrency and if
+you want to access the database from different hosts, you can provide a service
+using the RPC package. The advantage of this approach is that you are not bound
+to an external DBMS and that the simple DBM provided by this package is
+extremely fast.
+
+Therefore godbm is the ideal solution if you want to build things like a
+persistent cache, a session store or when you need to find a way to persist
+the mails for your own MDA!
+
+Attention: The godbm package is currently work in progress and the file format
+is likely to change in further versions. So do not use it for sensitive data
+yet!
+
+
+Usage
+-----
+
+To use this package, you first have to install it using goinstall:
+
+    goinstall github.com/tux21b.org/godbm/
+
+After that, you can start writing your own program using godbm. For example:
+
+    package main
+
+    import (
+        "github.com/tux21b/godbm"
+        "fmt"
+    )
+
+    func main() {
+        db, err := godbm.Create("test.db", 10)
+        if err != nil {
+            fmt.Println("Error:", err)
+        }
+
+        if err = db.Set([]byte("foo"), []byte("bar")); err != nil {
+            fmt.Println("Error:", err)
+        }
+
+        var data []byte
+        if data, err = db.Get([]byte("foo")); err != nil {
+            fmt.Println("Error:", err)
+        }
+        fmt.Printf("Data: %s\n", data)
+    }
+
+Additional examples can be found in the file "godbm_test.go".
+
+
+Status
+------
+
+This is currently a very early draft and a lot of features are missing. The
+file format might also change is further versions and backwards compatibility
+isn't a goal yet. But all kind of help or feedback is highly appreciated so do
+not hesitate to contact me.
+

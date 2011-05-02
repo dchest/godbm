@@ -15,7 +15,7 @@ extremely fast.
 
 Therefore godbm is the ideal solution if you want to build things like a
 persistent cache, a session store or when you need to find a way to persist
-mails in your own MDA!
+the mails for your own MDA!
 
 Attention: The godbm package is currently work in progress and the file format
 is likely to change in further versions. So do not use it for sensitive data
@@ -51,6 +51,7 @@ type record struct {
 // Create a new hash database with 2^nbuckets available slots
 func Create(path string, nbuckets uint32) (db *HashDB, err os.Error) {
 	var file *os.File
+	// TODO(tux21b): Do not overwrite existing files.
 	if file, err = os.Create(path); err != nil {
 		return
 	}
@@ -63,6 +64,8 @@ func Create(path string, nbuckets uint32) (db *HashDB, err os.Error) {
 	return
 }
 
+// TODO(tux21b): Add a Open() function
+
 // Write the bucket array to the file
 func (db *HashDB) writeBuckets() {
 	// TODO(tux21b): Consider using mmap for the bucket array
@@ -73,6 +76,7 @@ func (db *HashDB) writeBuckets() {
 
 // Store a (key, value) pair in the database
 func (db *HashDB) Set(key, value []byte) (err os.Error) {
+	// TODO(tux21b): Locks should only affect single records, not the file
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	offset, err := db.file.Seek(0, 2)
@@ -148,6 +152,8 @@ func (db *HashDB) Get(key []byte) (value []byte, err os.Error) {
 	value = rec.value
 	return
 }
+
+// TODO(tux21b): Add a db.Delete() method
 
 // Calculate the bucket ID for a given key. This ID is always between 0
 // and 2^nbuckets - 1 inclusive.

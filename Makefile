@@ -4,7 +4,7 @@
 
 include $(GOROOT)/src/Make.inc
 
-TARG=godbm
+TARG=github.com/tux21b/godbm
 
 GOFILES=\
 	godbm.go\
