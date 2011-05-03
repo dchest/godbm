@@ -138,8 +138,8 @@ func (db *HashDB) binSearch(key []byte, rec *record) (int, os.Error) {
 
 // Retrieve a (key, value) pair from the database
 func (db *HashDB) Get(key []byte) (value []byte, err os.Error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	offset := db.buckets[db.bucket(key)]
 	if offset == 0 {
 		return nil, nil
