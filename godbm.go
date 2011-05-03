@@ -4,7 +4,7 @@
 
 /*
 The godbm package provides a native DBM like database similar to Berkley DB,
-QDBM or Kyota Cabinet.
+QDBM or Kyoto Cabinet.
 
 This lightweight embedded database can only used by one process at a time, but
 that's not a problem because Go programs are quite good a concurrency and if
